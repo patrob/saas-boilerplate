@@ -1,0 +1,61 @@
+# Modern Docker Compose setup for SaaS Boilerplate
+# No volumes - fresh data on each run for clean development
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: saas-postgres
+    environment:
+      POSTGRES_DB: saas_db
+      POSTGRES_USER: saas_user
+      POSTGRES_PASSWORD: saas_password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saas_user -d saas_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c log_statement=all
+      -c log_destination=stderr
+      -c logging_collector=off
+      -c max_connections=100
+      -c shared_preload_libraries=pg_stat_statements
+
+  flyway:
+    image: flyway/flyway:11.10.2-alpine
+    container_name: saas-flyway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/saas_db
+      FLYWAY_USER: saas_user
+      FLYWAY_PASSWORD: saas_password
+      FLYWAY_SCHEMAS: public
+      FLYWAY_BASELINE_ON_MIGRATE: true
+    volumes:
+      - ./database/flyway/sql:/flyway/sql
+    command: migrate
+
+  prisma-generate:
+    image: node:22-alpine
+    container_name: saas-prisma
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://saas_user:saas_password@postgres:5432/saas_db
+    volumes:
+      - ./database:/app/database
+    working_dir: /app
+    command: sh -c "
+      echo 'Installing minimal Prisma CLI...' &&
+      npm install -g prisma@latest --no-package-lock &&
+      echo 'Running Prisma introspection...' &&
+      prisma db pull --schema=./database/schema.prisma &&
+      echo 'Generating Prisma client...' &&
+      prisma generate --schema=./database/schema.prisma"
+
